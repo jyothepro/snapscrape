@@ -134,16 +134,17 @@ Output:
             return 'Failed to fetch tweet';
         }
     
-        const tweet = await response.json();
-        if (!tweet || typeof tweet !== 'object' || !tweet.text) {
+        const tweetData: any = await response.json();
+        if (!this.isTweet(tweetData)) {
             return 'Tweet not found';
         }
-    
+
+        const tweet: Tweet = tweetData;
         const tweetMd = `
             Tweet from @${tweet.user?.name ?? tweet.user?.screen_name ?? 'Unknown'}
 
             ${tweet.text}
-            Images: ${tweet.photos ? tweet.photos.map((photo) => photo.url).join(', ') : 'none'}
+            Images: ${tweet.photos ? tweet.photos.map((photo: any) => photo.url).join(', ') : 'none'}
             Time: ${tweet.created_at}, Likes: ${tweet.favorite_count}, Retweets: ${tweet.conversation_count}
 
             raw: ${JSON.stringify(tweet, null, 2)}
@@ -152,26 +153,48 @@ Output:
         return tweetMd;
     }
 
-    private async crawlAndExtract(baseUrl: string, enableDetailedResponse: boolean, env: Env, applyLLM:boolean,  maxPages: number = 5): Promise<Array<{url: string, content: string}>> {
+    private async crawlAndExtract(baseUrl: string, enableDetailedResponse: boolean, env: Env, applyLLM: boolean, maxPages: number = 5): Promise<Array<{url: string, content: string}>> {
         const results: Array<{url: string, content: string}> = [];
         const visited = new Set<string>();
         const toVisit = [baseUrl];
-      
-        while (toVisit.length > 0 && results.length < maxPages) {
-          const url = toVisit.shift()!;
-          if (visited.has(url)) continue;
-          visited.add(url);
-      
-          const content = await this.extractSinglePage(url, enableDetailedResponse, env, applyLLM);
-          results.push({ url, content });
-      
-          if (results.length < maxPages) {
-            const newUrls = await this.extractLinks(url);
-            toVisit.push(...newUrls.filter(u => !visited.has(u)));
-          }
+    
+        try {
+            while (toVisit.length > 0 && (results.length < maxPages || toVisit.length === results.length)) {
+                const url = toVisit.shift()!;
+                if (visited.has(url)) continue;
+                visited.add(url);
+    
+                const content = await this.extractSinglePage(url, enableDetailedResponse, env, applyLLM);
+                results.push({ url, content });
+    
+                if (results.length < maxPages) {
+                    const newUrls = await this.extractLinks(url);
+                    // Only add URLs from the same domain
+                    const baseUrlDomain = new URL(baseUrl).hostname;
+                    toVisit.push(...newUrls.filter(u => !visited.has(u) && new URL(u).hostname === baseUrlDomain));
+                }
+            }
+        } catch (error) {
+            console.error(`Error during crawling: ${error}`);
+            // Optionally, you might want to add the error to the results or handle it differently
         }
-      
+    
         return results;
+    }
+
+    private async extractLinks(url: string): Promise<string[]> {
+        const page = await this.browser!.newPage();
+        try {
+            await page.goto(url, { waitUntil: 'networkidle0' });
+            const links = await page.evaluate(() => {
+                return Array.from(document.querySelectorAll('a'))
+                    .map((a: any) => (a as any).href)
+                    .filter((href: string) => href.startsWith('http'));
+            });
+            return links;
+        } finally {
+            await page.close();
+        }
     }
 
     private async extractSinglePage(url: string, enableDetailedResponse: boolean, env: Env, applyLLM: boolean): Promise<string> {
@@ -239,6 +262,17 @@ Output:
         return false;
     }
 
+    private isTweet(obj: any): obj is Tweet {
+        // Add checks here to ensure the object has the expected properties of a Tweet
+        return (
+            typeof obj === 'object' &&
+            obj !== null &&
+            typeof obj.id_str === 'string' &&
+            typeof obj.text === 'string'
+            // Add more checks as needed
+        );
+    }
+
     private async fetchAndProcessPage(url: string, enableDetailedResponse: boolean): Promise<string> {
         const page = await this.browser!.newPage();
 		await page.goto(url, { waitUntil: 'networkidle0' });
@@ -298,35 +332,35 @@ Output:
 		});
 	}
 
-    private extractArticleMarkdown(enableDetailedResponse: boolean): Promise<string> {
+    private async extractArticleMarkdown(enableDetailedResponse: boolean): Promise<string> {
         const readabilityScript = document.createElement('script');
         readabilityScript.src = 'https://unpkg.com/@mozilla/readability/Readability.js';
         document.head.appendChild(readabilityScript);
-
+    
         const turndownScript = document.createElement('script');
         turndownScript.src = 'https://unpkg.com/turndown/dist/turndown.js';
         document.head.appendChild(turndownScript);
-
-        return Promise.all([
+    
+        await Promise.all([
             new Promise((resolve) => (readabilityScript.onload = resolve)),
             new Promise((resolve) => (turndownScript.onload = resolve)),
-        ]).then(() => {
-            const reader = new Readability(document.cloneNode(true), {
-                charThreshold: 0,
-                keepClasses: true,
-                nbTopCandidates: 500,
-            });
-
-            const article = reader.parse();
-            const turndownService = new TurndownService();
-
-            let documentWithoutScripts = document.cloneNode(true) as Document;
-            ['script', 'style', 'iframe', 'noscript'].forEach(tag => {
-                documentWithoutScripts.querySelectorAll(tag).forEach(el => el.remove());
-            });
-
-            return turndownService.turndown(enableDetailedResponse ? documentWithoutScripts.body.innerHTML : article.content);
+        ]);
+    
+        const reader = new Readability(document.cloneNode(true), {
+            charThreshold: 0,
+            keepClasses: true,
+            nbTopCandidates: 500,
         });
+    
+        const article = reader.parse();
+        const turndownService = new TurndownService();
+    
+        let documentWithoutScripts = document.cloneNode(true) as any;
+        ['script', 'style', 'iframe', 'noscript'].forEach(tag => {
+            documentWithoutScripts.querySelectorAll(tag).forEach(el => el.remove());
+        });
+    
+        return turndownService.turndown(enableDetailedResponse ? documentWithoutScripts.body.innerHTML : article.content);
     }
 
     private isValidUrl(url: string): boolean {
