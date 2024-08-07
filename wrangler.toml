@@ -1,0 +1,34 @@
+name = "markdowner-final"
+main = "src/index.ts"
+compatibility_date = "2023-09-04"
+compatibility_flags = [ "nodejs_compat"]
+
+
+# Browser Rendering API binding
+browser = { binding = "MYBROWSER" }
+
+[[durable_objects.bindings]]
+name = "BROWSER"
+class_name = "Browser"
+
+[[migrations]]
+tag = "v1" # Should be unique for each entry
+new_classes = ["Browser"] # Array of new classes
+
+[[kv_namespaces]]
+binding = "md_cache"
+id = "6895f05a78334c86abe1a91a86133642"
+
+[[unsafe.bindings]]
+name = "RATELIMITER"
+type = "ratelimit"
+namespace_id = "1002"
+simple = { limit = 10, period = 60 } # 10 requests per 60 seconds
+
+[ai]
+binding = "AI"
+model = "@cf/qwen/qwen1.5-14b-chat-awq"
+
+routes = [
+	{ pattern = "snapscrape.jyothepro.com", custom_domain = true }
+]
