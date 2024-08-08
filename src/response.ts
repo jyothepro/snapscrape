@@ -109,7 +109,7 @@ export const html = `<!--
 					const spinnerContainer = document.getElementById('spinnerContainer');
                     spinnerContainer.classList.remove('hidden');
 
-					window.location.href = 'https://markdowner-final.cooljyo.workers.dev/?url=' + encodeURIComponent(urlInput);
+					window.location.href = 'https://snapscrape.jyothepro.com/?url=' + encodeURIComponent(urlInput);
 
 				}
 			});

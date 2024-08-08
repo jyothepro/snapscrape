@@ -1,4 +1,6 @@
 import puppeteer from '@cloudflare/puppeteer';
+import { normalizeUrl, getDomain } from './utils';
+import { RateLimiter } from './rateLimiter';
 import { Tweet } from 'react-tweet/api';
 import { html } from './response';
 
@@ -40,6 +42,8 @@ export class Browser {
     private request: Request | undefined;
     private llmFilter: boolean;
     private token: string = '';
+    private rateLimiter: RateLimiter;
+    
 
     constructor(state: DurableObjectState, env: Env) {
         this.state = state;
@@ -48,9 +52,16 @@ export class Browser {
         this.storage = this.state.storage;
         this.request = undefined;
         this.llmFilter = false;
+        this.rateLimiter = new RateLimiter(5, 10000, state.storage); // 5 requests per 10 seconds
     }
 
     async fetch(request: Request): Promise<Response> {
+        const ip = request.headers.get('cf-connecting-ip') || 'unknown';
+        const allowed = await this.rateLimiter.limit(ip);
+        if (!allowed) {
+            return new Response('Rate limit exceeded', { status: 429 });
+        }
+
         const targetUrl = new URL(request.url).searchParams.get('url');
 		const enableDetailedResponse = new URL(request.url).searchParams.get('enableDetailedResponse') === 'true';
         const crawlSubpages = new URL(request.url).searchParams.get('crawlSubpages') === 'true';
@@ -153,30 +164,42 @@ Output:
         return tweetMd;
     }
 
-    private async crawlAndExtract(baseUrl: string, enableDetailedResponse: boolean, env: Env, applyLLM: boolean, maxPages: number = 5): Promise<Array<{url: string, content: string}>> {
+    private async crawlAndExtract(
+        baseUrl: string,
+        enableDetailedResponse: boolean,
+        env: Env,
+        applyLLM: boolean,
+        maxPages: number = 5,
+        maxDepth: number = 3
+    ): Promise<Array<{url: string, content: string}>> {
         const results: Array<{url: string, content: string}> = [];
         const visited = new Set<string>();
-        const toVisit = [baseUrl];
-    
+        const toVisit: Array<{ url: string; depth: number }> = [{ url: baseUrl, depth: 0 }];
+        const rateLimiter = new RateLimiter(5, TEN_SECONDS);
+
         try {
-            while (toVisit.length > 0 && (results.length < maxPages || toVisit.length === results.length)) {
-                const url = toVisit.shift()!;
-                if (visited.has(url)) continue;
-                visited.add(url);
+            while (toVisit.length > 0 && results.length < maxPages) {
+                const { url, depth } = toVisit.shift()!;
+                const normalizedUrl = normalizeUrl(url);
+                if (visited.has(normalizedUrl) || depth > maxDepth) continue;
+                visited.add(normalizedUrl);
     
-                const content = await this.extractSinglePage(url, enableDetailedResponse, env, applyLLM);
-                results.push({ url, content });
+                await rateLimiter.limit(async () => {
+                    const content = await this.extractSinglePage(normalizedUrl, enableDetailedResponse, env, applyLLM);
+                    results.push({ url: normalizedUrl, content });
     
-                if (results.length < maxPages) {
-                    const newUrls = await this.extractLinks(url);
-                    // Only add URLs from the same domain
-                    const baseUrlDomain = new URL(baseUrl).hostname;
-                    toVisit.push(...newUrls.filter(u => !visited.has(u) && new URL(u).hostname === baseUrlDomain));
-                }
+                    if (results.length < maxPages) {
+                        const newUrls = await this.extractLinks(normalizedUrl);
+                        const baseUrlDomain = getDomain(baseUrl);
+                        toVisit.push(...newUrls
+                            .map(u => ({ url: normalizeUrl(u), depth: depth + 1 }))
+                            .filter(({ url }) => !visited.has(url) && getDomain(url) === baseUrlDomain));
+                    }
+                });
+                console.log(JSON.stringify(visited));
             }
         } catch (error) {
             console.error(`Error during crawling: ${error}`);
-            // Optionally, you might want to add the error to the results or handle it differently
         }
     
         return results;
@@ -211,25 +234,46 @@ Output:
         }
     }
 
-	private async extractContent(page: puppeteer.Page, enableDetailedResponse: boolean, applyLLM: boolean, url:string): Promise<string> {
-        let content: string;
-        if (enableDetailedResponse) {
-          content = await page.content();
-        } else {
-          // Extract main content (you might want to implement a more sophisticated extraction method)
-          content = await page.evaluate(() => {
-            const article = document.querySelector('article');
-            return article ? article.innerText : document.body.innerText;
-          });
-        }
+    private async extractContent(page: puppeteer.Page, enableDetailedResponse: boolean, applyLLM: boolean, url: string): Promise<string> {
+        const maxRetries = 3;
+        let retries = 0;
         
-        content = await this.fetchAndProcessPage(url, enableDetailedResponse);
-
-        if (applyLLM) {
-          content = await this.addLLMFilter(content);
+        while (retries < maxRetries) {
+            try {
+                let content: string;
+                if (enableDetailedResponse) {
+                    content = await page.content();
+                } else {
+                    content = await page.evaluate(() => {
+                        const article = document.querySelector('article');
+                        return article ? article.innerText : document.body.innerText;
+                    });
+                }
+                
+                content = await this.fetchAndProcessPage(url, enableDetailedResponse);
+    
+                if (applyLLM) {
+                    content = await this.addLLMFilter(content);
+                }
+                
+                return content;
+            } catch (e) {
+                if (e instanceof Error && e.message.includes("Execution context was destroyed")) {
+                    console.log(`Retry ${retries + 1}/${maxRetries} due to destroyed context`);
+                    retries++;
+                    if (retries >= maxRetries) {
+                        throw e;
+                    }
+                    // Wait a bit before retrying
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    // Reload the page
+                    await page.reload({ waitUntil: 'networkidle0' });
+                } else {
+                    throw e;
+                }
+            }
         }
-      
-        return content;
+        throw new Error("Max retries reached");
     }
       
 
