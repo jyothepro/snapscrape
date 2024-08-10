@@ -26,20 +26,32 @@ export class RateLimiter {
         await this.storage.put(`${key}:count`, count.toString());
     }
 
-    public async limit(key: string): Promise<boolean> {
-        const now = Date.now();
-        const lastRequestTime = await this.getLastRequestTime(key);
-        let requestCount = await this.getRequestCount(key);
-
-        if (now - lastRequestTime > this.interval) {
-            // Reset if interval has passed
-            requestCount = 1;
-        } else {
-            requestCount++;
+    public async limit<T>(key: string, fn: (() => Promise<T>) | null): Promise<boolean> {
+        try {
+            const now = Date.now();
+            const lastRequestTime = await this.getLastRequestTime(key);
+            let requestCount = await this.getRequestCount(key);
+            
+            console.log(`Time: ${lastRequestTime}, Count: ${requestCount}`);
+    
+            if (now - lastRequestTime > this.interval) {
+                requestCount = 1;
+            } else {
+                requestCount++;
+            }
+    
+            await this.updateState(key, now, requestCount);
+    
+            if (requestCount <= this.requests) {
+                if (fn) {
+                    await fn();
+                }
+                return true;
+            }
+            return false;
+        } catch (error) {
+            console.error('Error in rate limiting:', error);
+            return false;  // Fail closed: deny on error
         }
-
-        await this.updateState(key, now, requestCount);
-
-        return requestCount <= this.requests;
     }
 }
