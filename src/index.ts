@@ -106,7 +106,7 @@ export class Browser {
         } else {
             return new Response(typeof result === 'string' ? result : JSON.stringify(result), {
               status: 200,
-              headers: { 'Content-Type': 'text/plain' }
+              headers: { 'Content-Type': 'text/plain; charset=UTF-8' }
             });
         }
     }
@@ -156,11 +156,14 @@ Output:
             return 'Failed to fetch tweet';
         }
     
-        const tweetData: any = await response.json();
+        const utf8Decoder = new TextDecoder('utf-8');
+        const decodedText = utf8Decoder.decode(await response.arrayBuffer());
+        const tweetData: any = JSON.parse(decodedText);
+
         if (!this.isTweet(tweetData)) {
             return 'Tweet not found';
         }
-
+        
         const tweet: Tweet = tweetData;
         const tweetMd = `
             Tweet from @${tweet.user?.name ?? tweet.user?.screen_name ?? 'Unknown'}

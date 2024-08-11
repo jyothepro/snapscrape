@@ -30,9 +30,9 @@ These features make SnapScrape suitable for a wide range of applications, from c
 
 ## Supports:
 1. **Rate Limiting**: Prevents overwhelming the target server by limiting the number of requests per interval.
-2. **Browser Proxy IP Rotation**: Uses different proxy IPs to avoid detection and distribute requests.
 3. **Fingerprinting Rotation**: Randomizes browser fingerprints to mimic different users and avoid detection.
 4. **Random Delays**: Adds random delays between requests to simulate human behavior and avoid detection.
+5. **User Agent Rotation**: Randomizes browser user agents to mimic different users and avoid detection.
 
 ## Usage
 
