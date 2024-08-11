@@ -75,22 +75,31 @@ export class RotationManager {
       private timeWindow: number = 10000,
       private storage: DurableObjectStorage
     ) {
-      this.currentUserAgent = getRandomUserAgent();
-      this.currentFingerprint = getRandomFingerprint();
-      this.loadFingerprints();
+        this.currentUserAgent = getRandomUserAgent();
+        this.currentFingerprint = getRandomFingerprint();
+        this.loadFingerprints().catch(error => console.error('Error loading fingerprints:', error));
     }
   
     private async loadFingerprints() {
-      const successful = await this.storage.get('successfulFingerprints') as Map<string, number> | undefined;
-      if (successful) this.successfulFingerprints = successful;
-      const blocked = await this.storage.get('blockedFingerprints') as Set<string> | undefined;
-      if (blocked) this.blockedFingerprints = blocked;
-    }
+        const successful = await this.storage.get('successfulFingerprints');
+        if (successful) {
+          this.successfulFingerprints = new Map(JSON.parse(successful as string));
+        } else {
+          this.successfulFingerprints = new Map();
+        }
+      
+        const blocked = await this.storage.get('blockedFingerprints');
+        if (blocked) {
+          this.blockedFingerprints = new Set(JSON.parse(blocked as string));
+        } else {
+          this.blockedFingerprints = new Set();
+        }
+      }
   
-    private async saveFingerprints() {
-      await this.storage.put('successfulFingerprints', this.successfulFingerprints);
-      await this.storage.put('blockedFingerprints', this.blockedFingerprints);
-    }
+      private async saveFingerprints() {
+        await this.storage.put('successfulFingerprints', JSON.stringify(Array.from(this.successfulFingerprints.entries())));
+        await this.storage.put('blockedFingerprints', JSON.stringify(Array.from(this.blockedFingerprints)));
+      }
   
     shouldRotate(): boolean {
       this.counter++;
